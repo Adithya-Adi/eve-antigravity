@@ -1,0 +1,46 @@
+{
+  "name": "eve-antigravity",
+  "version": "0.1.0",
+  "description": "Use your local Antigravity CLI (agy) login as an AI SDK language model in eve agents.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "eve",
+    "antigravity",
+    "agy",
+    "gemini",
+    "ai-sdk",
+    "language-model"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^4.0.26"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "ai": "^7.0.137",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
