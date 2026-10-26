@@ -49,9 +49,19 @@ export interface AgyRunOptions {
   readonly timeoutMs?: number;
 }
 
+export type AgyErrorCode =
+  | "NOT_INSTALLED"
+  | "SIGN_IN_REQUIRED"
+  | "ALREADY_SIGNED_IN"
+  | "LOGIN_FAILED"
+  | "LOGIN_UNSUPPORTED"
+  | "TIMEOUT"
+  | "FAILED";
+
 export class AgyError extends Error {
   constructor(
     message: string,
+    readonly code: AgyErrorCode = "FAILED",
     readonly result?: AgyResult,
   ) {
     super(message);
@@ -100,9 +110,7 @@ export async function* runAgy(options: AgyRunOptions): AsyncGenerator<AgyEvent> 
     child.once("error", (error: NodeJS.ErrnoException) => {
       reject(
         error.code === "ENOENT"
-          ? new AgyError(
-              `Could not find the Antigravity CLI ("${options.command}"). Install agy and sign in, or pass agyPath.`,
-            )
+          ? notInstalledError(options.command)
           : error,
       );
     });
@@ -139,14 +147,14 @@ export async function* runAgy(options: AgyRunOptions): AsyncGenerator<AgyEvent> 
     options.signal?.throwIfAborted();
     if (result === undefined) {
       if (timer !== undefined && code === null) {
-        throw new AgyError(`agy timed out after ${options.timeoutMs}ms.`);
+        throw new AgyError(`agy timed out after ${options.timeoutMs}ms.`, "TIMEOUT");
       }
       throw new AgyError(
         `agy exited (code ${code}) without a result.${stderr ? ` ${stderr.trim()}` : ""}`,
       );
     }
     if (result.status !== "SUCCESS") {
-      throw new AgyError(describeFailure(result), result);
+      throw failureError(result);
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -168,10 +176,25 @@ function parseEvent(line: string): AgyEvent | undefined {
   return undefined;
 }
 
-function describeFailure(result: AgyResult): string {
+export function notInstalledError(command: string): AgyError {
+  return new AgyError(
+    `Could not find the Antigravity CLI ("${command}"). Install agy and sign in, or pass agyPath.`,
+    "NOT_INSTALLED",
+  );
+}
+
+export function isSignInMessage(message: string): boolean {
+  return /not (logged|signed) in|sign in|unauthenticated|authenticat/i.test(message);
+}
+
+function failureError(result: AgyResult): AgyError {
   const error = result.error ?? `status ${result.status}`;
-  if (/not logged in|sign in|unauthenticated|auth/i.test(error)) {
-    return `agy is not signed in (${error}). Run \`agy\` once and sign in with your Google account.`;
+  if (isSignInMessage(error)) {
+    return new AgyError(
+      `agy is not signed in (${error}). Run \`agy\` once and sign in with your Google account, or use startAntigravityLogin().`,
+      "SIGN_IN_REQUIRED",
+      result,
+    );
   }
-  return `agy failed: ${error}`;
+  return new AgyError(`agy failed: ${error}`, "FAILED", result);
 }

@@ -2,6 +2,16 @@
 // replays canned print-mode events selected by FAKE_AGY_SCENARIO.
 import { writeFileSync } from "node:fs";
 
+if (process.argv[2] === "models") {
+  process.stderr.write("Fetching available models...\n");
+  if (process.env.FAKE_AGY_SCENARIO === "error") {
+    process.stderr.write("Error: Please sign in to view available models. Launch the CLI without arguments to sign in.\n");
+    process.exit(1);
+  }
+  process.stdout.write("gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n");
+  process.exit(0);
+}
+
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => (input += chunk));

@@ -42,4 +42,12 @@ export function antigravityContextWindow(model: string = DEFAULT_ANTIGRAVITY_MOD
 }
 
 export { AntigravityLanguageModel, type AntigravitySettings } from "./model.js";
-export { AgyError } from "./agy.js";
+export { AgyError, type AgyErrorCode } from "./agy.js";
+export {
+  isAntigravitySignedIn,
+  listAntigravityModels,
+  startAntigravityLogin,
+  type AntigravityAuthOptions,
+  type AntigravityLogin,
+  type AntigravityLoginOptions,
+} from "./login.js";
