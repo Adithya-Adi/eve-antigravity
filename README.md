@@ -58,6 +58,18 @@ Returns a `LanguageModelV4`. `model` defaults to `gemini-3.8-flash-medium`. An `
 
 eve looks up context windows in the AI Gateway catalog, and agy models aren't listed there. Pass this value as `modelContextWindowTokens`. Without it, eve refuses to compile the agent. Defaults: Gemini 1M, Claude 200K, other models 128K.
 
+### Sign-in helpers
+
+These use the same runtime home as `antigravity()`. All accept `{ agyPath, agyArgs, runtimeDir, env }`.
+
+| Function | Description |
+| --- | --- |
+| `isAntigravitySignedIn()` | `true` if agy has a usable sign-in. Runs `agy models`, which costs no model quota |
+| `listAntigravityModels()` | Model IDs for the signed-in account. Throws `SIGN_IN_REQUIRED` when signed out |
+| `startAntigravityLogin()` | Starts agy's Google sign-in and returns `{ url, submitCode(code), cancel() }` |
+
+Errors are `AgyError` instances with a `code`: `NOT_INSTALLED`, `SIGN_IN_REQUIRED`, `ALREADY_SIGNED_IN`, `LOGIN_FAILED`, `LOGIN_UNSUPPORTED`, `TIMEOUT`, or `FAILED`. Model calls made while signed out fail with `SIGN_IN_REQUIRED`, so your app can catch that and show its sign-in UI.
+
 ## Supported features
 
 | Feature                           | Status                                                         |
@@ -77,11 +89,26 @@ Each step resends the whole conversation, plus about 7K tokens of agy's own syst
 
 On a desktop, agy keeps your Google sign-in in the OS keyring, so you can't copy it from your laptop into a container. Inside a Linux container without a keyring, agy saves the sign-in to a file instead: `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`. If you sign in once inside the container and keep that file on a volume, the login survives restarts. (Tested with agy 1.4.7 on `node:24-slim`.)
 
-eve-antigravity runs agy with `HOME=<runtimeDir>/home`, so sign in with that same home:
+eve-antigravity runs agy with `HOME=<runtimeDir>/home`, so the sign-in must use that same home. There are two ways to do it.
+
+**From your app (no shell access needed).** Show the URL to an admin, let them paste the code back, and finish the sign-in:
+
+```ts
+import { isAntigravitySignedIn, startAntigravityLogin } from "eve-antigravity";
+
+if (!(await isAntigravitySignedIn())) {
+  const login = await startAntigravityLogin();
+  showToAdmin(login.url);              // they sign in with Google
+  const code = await askAdminForCode(); // shown on antigravity.google after sign-in
+  await login.submitCode(code);         // stores the session; throws AgyError on a bad code
+}
+```
+
+`startAntigravityLogin()` drives agy's interactive sign-in in a pseudo-terminal using `script` (util-linux on Linux, built into macOS). It is not available on Windows; there, run `agy` once in a terminal. Hold the `login` object in memory between showing the URL and receiving the code: each URL belongs to one running agy process, and `cancel()` or a 10-minute timeout ends it. Put the sign-in UI behind admin-only authentication.
+
+**From a shell.**
 
 ```bash
-# image: Linux agy on PATH (curl -fsSL https://antigravity.google/cli/install.sh | bash)
-# pod: EVE_ANTIGRAVITY_DIR=/data/eve-antigravity, with /data on a persistent volume
 kubectl exec -it <pod> -- sh -c 'mkdir -p "$EVE_ANTIGRAVITY_DIR/home" && cd "$EVE_ANTIGRAVITY_DIR" && HOME="$EVE_ANTIGRAVITY_DIR/home" agy'
 # choose "1. Google OAuth", open the printed URL, sign in,
 # paste the authorization code shown on antigravity.google, then quit agy
@@ -89,10 +116,11 @@ kubectl exec -it <pod> -- sh -c 'mkdir -p "$EVE_ANTIGRAVITY_DIR/home" && cd "$EV
 
 Container checklist:
 
-1. Install agy in the image (Linux build) and put it on `PATH`, or set `agyPath`.
+1. Install agy in the image and put it on `PATH`, or set `agyPath`: `curl -fsSL https://antigravity.google/cli/install.sh | bash`. Include `script` (util-linux) if you use `startAntigravityLogin()`.
 2. Set `EVE_ANTIGRAVITY_DIR` to a path on a **writable persistent volume**. agy refreshes the access token in place.
 3. Sign in once as shown above. Repeat if the token is revoked or the volume is lost.
 4. Treat the token file like a password. It grants access to your Google account's Antigravity and Cloud scopes. Never bake it into an image or commit it.
+5. Run an init process as PID 1 (`docker run --init`, tini, or `shareProcessNamespace` in Kubernetes) so exited agy processes are reaped.
 
 Alternatively, agy signs in without a browser via `GEMINI_API_KEY` (agy 1.1.13+) or a service account / Application Default Credentials (1.1.10+); see [google-antigravity/antigravity-cli#223](https://github.com/google-antigravity/antigravity-cli/issues/223). Both are billed per token instead of using your Antigravity plan. eve-antigravity passes the process environment through to agy.
 
