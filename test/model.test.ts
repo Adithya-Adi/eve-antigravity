@@ -113,7 +113,7 @@ describe("antigravity()", () => {
 
     expect(executed).toEqual(["ls"]);
     expect(result.steps[0]?.finishReason).toBe("tool-calls");
-    expect(result.steps[0]?.text).toBe("");
+    expect(result.steps[0]?.text).toBe("Listing the files.");
     expect(result.text).toBe("The directory has README.md.");
     expect(result.finishReason).toBe("stop");
 
@@ -121,8 +121,32 @@ describe("antigravity()", () => {
     expect(call.prompt).toContain("AVAILABLE TOOLS:\n- bash: Run a bash command.");
     expect(call.prompt).toMatch(/\[tool call bash id=call_[\w-]+\] \{"command":"ls"\}/);
     expect(call.prompt).toMatch(/\[tool result bash id=call_[\w-]+\]\nREADME\.md/);
-    const schema = JSON.parse(call.args[call.args.indexOf("--json-schema") + 1]!);
-    expect(schema.properties.toolCalls.items.properties.name.enum).toEqual(["bash"]);
+    expect(call.prompt).toContain("<tool_calls>");
+    // Tools mode streams plain text; no schema is forced.
+    expect(call.args).not.toContain("--json-schema");
+  });
+
+  it("streams the answer text while tools are offered", async () => {
+    const deltas: string[] = [];
+    const result = streamText({
+      model: model("tool-loop"),
+      prompt: "[tool result bash id=call_1]\nREADME.md",
+      tools: { bash: tool({ inputSchema: z.object({ command: z.string() }) }) },
+    });
+    for await (const delta of result.textStream) deltas.push(delta);
+
+    expect(deltas.join("")).toBe("The directory has README.md.");
+    expect(deltas.length).toBeGreaterThan(3);
+    expect(deltas.some((delta) => delta.includes("<"))).toBe(false);
+  });
+
+  it("fails clearly on a malformed tool block", async () => {
+    const result = generateText({
+      model: model("malformed-tools"),
+      prompt: "hi",
+      tools: { bash: tool({ inputSchema: z.object({ command: z.string() }) }) },
+    });
+    await expect(result).rejects.toThrow(/malformed tool calls/);
   });
 
   it("does not offer tools when toolChoice is none", async () => {

@@ -31,6 +31,12 @@ process.stdin.on("end", () => {
   const id = "conv-1";
   const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
   const usage = { input_tokens: 100, output_tokens: 5, thinking_tokens: 3, cache_read_tokens: 40, total_tokens: 108 };
+  // agy streams replies in small chunks; 5 characters splits the tag too.
+  const streamText = (stepIndex, text) => {
+    for (let i = 0; i < text.length; i += 5) {
+      emit({ event: "step_update", step_update: { step_index: stepIndex, state: "ACTIVE", step_type: "agent_response", text_delta: text.slice(i, i + 5) } });
+    }
+  };
 
   switch (process.env.FAKE_AGY_SCENARIO ?? "text") {
     case "text":
@@ -43,13 +49,19 @@ process.stdin.on("end", () => {
     case "tool-loop": {
       // First turn requests a tool; once a tool result is in the prompt, answer.
       const answered = /\[tool result \w+ id=/.test(message.message.content);
-      const structured = answered
-        ? { text: "The directory has README.md.", toolCalls: [] }
-        : { text: "", toolCalls: [{ name: "bash", input: { command: "ls" } }] };
+      const reply = answered
+        ? "The directory has README.md."
+        : 'Listing the files.\n```json\n<tool_calls>[{"name": "bash", "input": {"command": "ls"}}]</tool_calls>\n```';
       emit({ event: "init", conversation_id: id });
-      // Schema mode streams the raw JSON as response text; it must not leak.
-      emit({ event: "step_update", step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: JSON.stringify(structured) } });
-      emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: JSON.stringify(structured), structured_output: structured, usage } });
+      streamText(1, reply);
+      emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: reply, usage } });
+      process.exit(0);
+    }
+    case "malformed-tools": {
+      const reply = "Checking.<tool_calls>[{name: bash}]</tool_calls>";
+      emit({ event: "init", conversation_id: id });
+      streamText(1, reply);
+      emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: reply, usage } });
       process.exit(0);
     }
     case "json": {

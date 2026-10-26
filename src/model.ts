@@ -15,10 +15,9 @@ import { renderPrompt } from "./prompt.js";
 import { prepareRuntime, type AgyRuntime } from "./runtime.js";
 import {
   functionTools,
-  parseToolTurn,
   renderToolInstructions,
-  toolTurnSchema,
-  type ToolTurn,
+  ToolCallStream,
+  type ToolCallRequest,
 } from "./tools.js";
 
 export interface AntigravitySettings {
@@ -110,7 +109,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
     const tools = functionTools(options);
     const mode: Mode =
       tools.length > 0
-        ? { kind: "tools", schema: toolTurnSchema(tools) }
+        ? { kind: "tools" }
         : options.responseFormat?.type === "json" && options.responseFormat.schema
           ? { kind: "json", schema: options.responseFormat.schema }
           : { kind: "text" };
@@ -125,7 +124,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       model: this.modelId,
       ...(this.settings.effort && { effort: this.settings.effort }),
       prompt,
-      ...(mode.kind !== "text" && { jsonSchema: mode.schema }),
+      ...(mode.kind === "json" && { jsonSchema: mode.schema }),
       cwd: runtime.workspace,
       env: mergeEnv(runtime, this.settings.env),
       ...(options.abortSignal && { signal: options.abortSignal }),
@@ -147,6 +146,9 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
           controller.enqueue({ type: "text-delta", id: textId, delta });
         };
         let result: AgyResult | undefined;
+        // Tools mode: the reply is prose followed by an optional
+        // <tool_calls> block. Stream the prose; parse the block at the end.
+        const replies = mode.kind === "tools" ? new ToolCallStream() : undefined;
         try {
           for await (const event of events) {
             if (event.event === "init") {
@@ -156,22 +158,21 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
                 ...(event.conversation_id && { id: event.conversation_id }),
               });
             } else if (event.event === "step_update") {
-              // In schema modes the response text is raw JSON; the answer is
-              // read from the final result instead.
               const step = event.step_update;
-              if (mode.kind === "text" && step.step_type === "agent_response" && step.text_delta) {
-                emitText(step.text_delta);
-              }
+              if (step.step_type !== "agent_response" || !step.text_delta) continue;
+              if (replies) emitText(replies.push(step.text_delta));
+              else if (mode.kind === "text") emitText(step.text_delta);
+              // JSON response formats are emitted whole from the final result.
             } else if (event.event === "result") {
               result = event.result;
             }
           }
 
-          let turn: ToolTurn | undefined;
-          if (mode.kind === "tools") {
-            turn = parseToolTurn(result?.structured_output) ??
-              parseToolTurn(result?.response) ?? { text: result?.response ?? "", toolCalls: [] };
-            emitText(turn.text);
+          let toolCalls: ToolCallRequest[] = [];
+          if (replies) {
+            const reply = replies.finish();
+            emitText(reply.text);
+            toolCalls = reply.toolCalls;
           } else if (mode.kind === "json") {
             emitText(
               result?.structured_output !== undefined
@@ -181,7 +182,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
           }
           if (textOpen) controller.enqueue({ type: "text-end", id: textId });
 
-          for (const call of turn?.toolCalls ?? []) {
+          for (const call of toolCalls) {
             controller.enqueue({
               type: "tool-call",
               toolCallId: `call_${randomUUID()}`,
@@ -191,7 +192,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
           }
           controller.enqueue({
             type: "finish",
-            finishReason: finishReason(result, (turn?.toolCalls.length ?? 0) > 0),
+            finishReason: finishReason(result, toolCalls.length > 0),
             usage: toUsage(result?.usage),
           });
         } catch (error) {
@@ -211,7 +212,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
 
 type Mode =
   | { readonly kind: "text" }
-  | { readonly kind: "tools"; readonly schema: object }
+  | { readonly kind: "tools" }
   | { readonly kind: "json"; readonly schema: object };
 
 function mergeEnv(
