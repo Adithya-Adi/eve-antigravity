@@ -6,7 +6,7 @@ const PREAMBLE = `You are the language model behind an external agent runtime. A
  * Flattens an AI SDK prompt into one text prompt. agy runs a fresh,
  * stateless turn per model call, so the whole conversation is sent each time.
  */
-export function renderPrompt(prompt: LanguageModelV4Prompt): string {
+export function renderPrompt(prompt: LanguageModelV4Prompt, toolInstructions?: string): string {
   const system = prompt
     .filter((message) => message.role === "system")
     .map((message) => message.content.trim())
@@ -58,6 +58,7 @@ export function renderPrompt(prompt: LanguageModelV4Prompt): string {
   return [
     PREAMBLE,
     system.length > 0 ? `SYSTEM INSTRUCTIONS:\n${system.join("\n\n")}` : undefined,
+    toolInstructions,
     `CONVERSATION:\n${transcript.join("\n\n")}`,
   ]
     .filter((block) => block !== undefined)

@@ -9,9 +9,17 @@ import type {
   LanguageModelV4Usage,
   SharedV4Warning,
 } from "@ai-sdk/provider";
+import { randomUUID } from "node:crypto";
 import { runAgy, type AgyResult, type AgyUsage } from "./agy.js";
 import { renderPrompt } from "./prompt.js";
 import { prepareRuntime, type AgyRuntime } from "./runtime.js";
+import {
+  functionTools,
+  parseToolTurn,
+  renderToolInstructions,
+  toolTurnSchema,
+  type ToolTurn,
+} from "./tools.js";
 
 export interface AntigravitySettings {
   /** Path to the agy executable. Defaults to `agy` on PATH. */
@@ -75,6 +83,9 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         case "text-delta":
           text += part.delta;
           break;
+        case "tool-call":
+          content.push(part);
+          break;
         case "error":
           throw part.error;
         case "finish":
@@ -96,7 +107,17 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
 
   async doStream(options: LanguageModelV4CallOptions): Promise<LanguageModelV4StreamResult> {
     const runtime = await prepareRuntime(this.settings.runtimeDir);
-    const prompt = renderPrompt(options.prompt);
+    const tools = functionTools(options);
+    const mode: Mode =
+      tools.length > 0
+        ? { kind: "tools", schema: toolTurnSchema(tools) }
+        : options.responseFormat?.type === "json" && options.responseFormat.schema
+          ? { kind: "json", schema: options.responseFormat.schema }
+          : { kind: "text" };
+    const prompt = renderPrompt(
+      options.prompt,
+      mode.kind === "tools" ? renderToolInstructions(tools, options.toolChoice) : undefined,
+    );
     const warnings = collectWarnings(options);
     const events = runAgy({
       command: this.settings.agyPath ?? "agy",
@@ -104,6 +125,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       model: this.modelId,
       ...(this.settings.effort && { effort: this.settings.effort }),
       prompt,
+      ...(mode.kind !== "text" && { jsonSchema: mode.schema }),
       cwd: runtime.workspace,
       env: mergeEnv(runtime, this.settings.env),
       ...(options.abortSignal && { signal: options.abortSignal }),
@@ -116,6 +138,14 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         controller.enqueue({ type: "stream-start", warnings });
         const textId = "text-0";
         let textOpen = false;
+        const emitText = (delta: string) => {
+          if (delta.length === 0) return;
+          if (!textOpen) {
+            controller.enqueue({ type: "text-start", id: textId });
+            textOpen = true;
+          }
+          controller.enqueue({ type: "text-delta", id: textId, delta });
+        };
         let result: AgyResult | undefined;
         try {
           for await (const event of events) {
@@ -126,22 +156,42 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
                 ...(event.conversation_id && { id: event.conversation_id }),
               });
             } else if (event.event === "step_update") {
+              // In schema modes the response text is raw JSON; the answer is
+              // read from the final result instead.
               const step = event.step_update;
-              if (step.step_type === "agent_response" && step.text_delta) {
-                if (!textOpen) {
-                  controller.enqueue({ type: "text-start", id: textId });
-                  textOpen = true;
-                }
-                controller.enqueue({ type: "text-delta", id: textId, delta: step.text_delta });
+              if (mode.kind === "text" && step.step_type === "agent_response" && step.text_delta) {
+                emitText(step.text_delta);
               }
             } else if (event.event === "result") {
               result = event.result;
             }
           }
+
+          let turn: ToolTurn | undefined;
+          if (mode.kind === "tools") {
+            turn = parseToolTurn(result?.structured_output) ??
+              parseToolTurn(result?.response) ?? { text: result?.response ?? "", toolCalls: [] };
+            emitText(turn.text);
+          } else if (mode.kind === "json") {
+            emitText(
+              result?.structured_output !== undefined
+                ? JSON.stringify(result.structured_output)
+                : (result?.response ?? ""),
+            );
+          }
           if (textOpen) controller.enqueue({ type: "text-end", id: textId });
+
+          for (const call of turn?.toolCalls ?? []) {
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: `call_${randomUUID()}`,
+              toolName: call.name,
+              input: JSON.stringify(call.input),
+            });
+          }
           controller.enqueue({
             type: "finish",
-            finishReason: finishReason(result),
+            finishReason: finishReason(result, (turn?.toolCalls.length ?? 0) > 0),
             usage: toUsage(result?.usage),
           });
         } catch (error) {
@@ -159,6 +209,11 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
   }
 }
 
+type Mode =
+  | { readonly kind: "text" }
+  | { readonly kind: "tools"; readonly schema: object }
+  | { readonly kind: "json"; readonly schema: object };
+
 function mergeEnv(
   runtime: AgyRuntime,
   extra: Readonly<Record<string, string>> | undefined,
@@ -171,17 +226,27 @@ function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[]
   for (const feature of UNSUPPORTED_SETTINGS) {
     if (options[feature] !== undefined) warnings.push({ type: "unsupported", feature });
   }
-  if (options.tools !== undefined && options.tools.length > 0) {
-    warnings.push({ type: "unsupported", feature: "tools" });
+  for (const tool of options.tools ?? []) {
+    if (tool.type !== "function") {
+      warnings.push({ type: "unsupported", feature: `provider tool ${tool.id}` });
+    }
   }
-  if (options.responseFormat?.type === "json") {
-    warnings.push({ type: "unsupported", feature: "responseFormat" });
+  if (options.responseFormat?.type === "json" && options.responseFormat.schema === undefined) {
+    warnings.push({
+      type: "unsupported",
+      feature: "responseFormat",
+      details: "JSON output without a schema is not enforced.",
+    });
   }
   return warnings;
 }
 
-function finishReason(result: AgyResult | undefined): LanguageModelV4FinishReason {
-  return { unified: result?.status === "SUCCESS" ? "stop" : "other", raw: result?.status };
+function finishReason(
+  result: AgyResult | undefined,
+  calledTools: boolean,
+): LanguageModelV4FinishReason {
+  const unified = result?.status !== "SUCCESS" ? "other" : calledTools ? "tool-calls" : "stop";
+  return { unified, raw: result?.status };
 }
 
 function toUsage(usage: AgyUsage | undefined): LanguageModelV4Usage {

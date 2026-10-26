@@ -2,7 +2,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateText, streamText } from "ai";
+import { generateText, Output, stepCountIs, streamText, tool } from "ai";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgyError, antigravity, antigravityContextWindow } from "../src/index.js";
 
@@ -90,6 +91,60 @@ describe("antigravity()", () => {
     const deltas: string[] = [];
     for await (const delta of result.textStream) deltas.push(delta);
     expect(deltas).toEqual(["hello ", "world"]);
+  });
+
+  it("returns tool calls for the runtime and answers from tool results", async () => {
+    const executed: string[] = [];
+    const result = await generateText({
+      model: model("tool-loop"),
+      prompt: "What files are here?",
+      tools: {
+        bash: tool({
+          description: "Run a bash command.",
+          inputSchema: z.object({ command: z.string() }),
+          execute: async ({ command }) => {
+            executed.push(command);
+            return "README.md";
+          },
+        }),
+      },
+      stopWhen: stepCountIs(3),
+    });
+
+    expect(executed).toEqual(["ls"]);
+    expect(result.steps[0]?.finishReason).toBe("tool-calls");
+    expect(result.steps[0]?.text).toBe("");
+    expect(result.text).toBe("The directory has README.md.");
+    expect(result.finishReason).toBe("stop");
+
+    const call = await lastCall();
+    expect(call.prompt).toContain("AVAILABLE TOOLS:\n- bash: Run a bash command.");
+    expect(call.prompt).toMatch(/\[tool call bash id=call_[\w-]+\] \{"command":"ls"\}/);
+    expect(call.prompt).toMatch(/\[tool result bash id=call_[\w-]+\]\nREADME\.md/);
+    const schema = JSON.parse(call.args[call.args.indexOf("--json-schema") + 1]!);
+    expect(schema.properties.toolCalls.items.properties.name.enum).toEqual(["bash"]);
+  });
+
+  it("does not offer tools when toolChoice is none", async () => {
+    await generateText({
+      model: model("text"),
+      prompt: "hi",
+      tools: { bash: tool({ inputSchema: z.object({ command: z.string() }) }) },
+      toolChoice: "none",
+    });
+    const call = await lastCall();
+    expect(call.args).not.toContain("--json-schema");
+    expect(call.prompt).not.toContain("AVAILABLE TOOLS");
+  });
+
+  it("enforces JSON response schemas", async () => {
+    const result = await generateText({
+      model: model("json"),
+      prompt: "Capital of France?",
+      output: Output.object({ schema: z.object({ city: z.string() }) }),
+    });
+    expect(result.output).toEqual({ city: "Paris" });
+    expect((await lastCall()).args).toContain("--json-schema");
   });
 
   it("surfaces sign-in failures", async () => {
