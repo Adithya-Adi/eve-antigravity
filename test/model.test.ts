@@ -31,13 +31,20 @@ function model(scenario: string, settings: { timeoutMs?: number } = {}) {
   });
 }
 
-async function lastCall() {
-  return JSON.parse(await readFile(log, "utf8")) as {
-    args: string[];
-    prompt: string;
-    cwd: string;
-    home: string;
-  };
+interface AgyCall {
+  args: string[];
+  prompt: string;
+  cwd: string;
+  home: string;
+}
+
+async function allCalls(): Promise<AgyCall[]> {
+  const lines = (await readFile(log, "utf8")).trim().split("\n");
+  return lines.map((line) => JSON.parse(line) as AgyCall);
+}
+
+async function lastCall(): Promise<AgyCall> {
+  return (await allCalls()).at(-1)!;
 }
 
 describe("antigravity()", () => {
@@ -140,13 +147,63 @@ describe("antigravity()", () => {
     expect(deltas.some((delta) => delta.includes("<"))).toBe(false);
   });
 
-  it("fails clearly on a malformed tool block", async () => {
-    const result = generateText({
-      model: model("malformed-tools"),
-      prompt: "hi",
-      tools: { bash: tool({ inputSchema: z.object({ command: z.string() }) }) },
+  describe("malformed tool blocks", () => {
+    function bashTool(executed: string[]) {
+      return {
+        bash: tool({
+          inputSchema: z.object({ command: z.string() }),
+          execute: async ({ command }) => {
+            executed.push(command);
+            return "README.md";
+          },
+        }),
+      };
+    }
+
+    it("passes salvaged bad arguments to the AI SDK, which reports them to the model", async () => {
+      const executed: string[] = [];
+      const result = await generateText({
+        model: model("bad-input"),
+        prompt: "hi",
+        tools: bashTool(executed),
+        stopWhen: stepCountIs(3),
+      });
+
+      // The broken call is not executed; the model sees the error and finishes.
+      expect(executed).toEqual([]);
+      expect(result.steps[0]?.toolCalls[0]).toMatchObject({ toolName: "bash", invalid: true });
+      expect(result.text).toBe("Done.");
+      expect((await lastCall()).prompt).toMatch(/\[tool result bash id=call_[\w-]+\]\nERROR/);
+      // No recovery call was needed: the tool name was readable.
+      expect(await allCalls()).toHaveLength(2);
     });
-    await expect(result).rejects.toThrow(/malformed tool calls/);
+
+    it("recovers unreadable tool calls with one schema call", async () => {
+      const executed: string[] = [];
+      const result = await generateText({
+        model: model("malformed-tools"),
+        prompt: "hi",
+        tools: bashTool(executed),
+        stopWhen: stepCountIs(3),
+      });
+
+      expect(executed).toEqual(["ls"]);
+      expect(result.steps[0]?.text).toBe("Checking.");
+      expect(result.text).toBe("Done.");
+      const calls = await allCalls();
+      expect(calls).toHaveLength(3);
+      expect(calls[1]?.args).toContain("--json-schema");
+      expect(calls[1]?.prompt).toContain("REPLY:\nChecking.<tool_calls>[{name: bash");
+    });
+
+    it("fails clearly when recovery finds nothing", async () => {
+      const result = generateText({
+        model: model("recovery-fails"),
+        prompt: "hi",
+        tools: bashTool([]),
+      });
+      await expect(result).rejects.toThrow(/could not be recovered/);
+    });
   });
 
   it("does not offer tools when toolChoice is none", async () => {

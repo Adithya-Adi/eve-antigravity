@@ -75,7 +75,7 @@ Errors are `AgyError` instances with a `code`: `NOT_INSTALLED`, `SIGN_IN_REQUIRE
 | Feature                           | Status                                                         |
 | --------------------------------- | -------------------------------------------------------------- |
 | Text generation and streaming     | Yes, including while tools are offered                         |
-| Tool calling (eve tools, MCP)     | Yes, via a `<tool_calls>` block in the reply. A malformed block fails the step with an error |
+| Tool calling (eve tools, MCP)     | Yes, via a `<tool_calls>` block in the reply. Broken arguments go back to the model as a tool error so it can retry; an unreadable block is recovered with one extra non-streamed agy call |
 | `toolChoice` none/required/tool   | Yes                                                            |
 | JSON output with a schema         | Yes (`--json-schema`)                                          |
 | Usage (input/output/reasoning/cache) | Yes, from agy's result event                                |

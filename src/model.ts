@@ -10,11 +10,15 @@ import type {
   SharedV4Warning,
 } from "@ai-sdk/provider";
 import { randomUUID } from "node:crypto";
-import { runAgy, type AgyResult, type AgyUsage } from "./agy.js";
+import { AgyError, runAgy, type AgyResult, type AgyUsage } from "./agy.js";
 import { renderPrompt } from "./prompt.js";
 import { prepareRuntime, type AgyRuntime } from "./runtime.js";
 import {
   functionTools,
+  parseToolCalls,
+  readRecoveredToolCalls,
+  recoverySchema,
+  renderRecoveryPrompt,
   renderToolInstructions,
   ToolCallStream,
   type ToolCallRequest,
@@ -118,18 +122,41 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       mode.kind === "tools" ? renderToolInstructions(tools, options.toolChoice) : undefined,
     );
     const warnings = collectWarnings(options);
-    const events = runAgy({
+    const agy = {
       command: this.settings.agyPath ?? "agy",
       ...(this.settings.agyArgs && { prefixArgs: this.settings.agyArgs }),
       model: this.modelId,
       ...(this.settings.effort && { effort: this.settings.effort }),
-      prompt,
-      ...(mode.kind === "json" && { jsonSchema: mode.schema }),
       cwd: runtime.workspace,
       env: mergeEnv(runtime, this.settings.env),
       ...(options.abortSignal && { signal: options.abortSignal }),
       timeoutMs: this.settings.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    };
+    const events = runAgy({
+      ...agy,
+      prompt,
+      ...(mode.kind === "json" && { jsonSchema: mode.schema }),
     });
+
+    // Last resort when a tool block names no readable tool: ask agy, without
+    // streaming and with a schema, which calls the reply intended.
+    const recoverToolCalls = async (reply: string) => {
+      let recovered: AgyResult | undefined;
+      for await (const event of runAgy({
+        ...agy,
+        prompt: renderRecoveryPrompt(tools, reply),
+        jsonSchema: recoverySchema(tools),
+      })) {
+        if (event.event === "result") recovered = event.result;
+      }
+      const calls = readRecoveredToolCalls(recovered?.structured_output);
+      if (calls.length === 0) {
+        throw new AgyError(
+          `The model returned malformed tool calls that could not be recovered: ${reply.slice(-200)}`,
+        );
+      }
+      return { calls, usage: recovered?.usage };
+    };
 
     const modelId = this.modelId;
     const stream = new ReadableStream<LanguageModelV4StreamPart>({
@@ -169,10 +196,20 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
           }
 
           let toolCalls: ToolCallRequest[] = [];
+          let recoveryUsage: AgyUsage | undefined;
           if (replies) {
             const reply = replies.finish();
             emitText(reply.text);
-            toolCalls = reply.toolCalls;
+            if (reply.block !== undefined) {
+              const parsed = parseToolCalls(reply.block);
+              if (parsed !== undefined) {
+                toolCalls = parsed;
+              } else {
+                const recovered = await recoverToolCalls(replies.reply);
+                toolCalls = recovered.calls;
+                recoveryUsage = recovered.usage;
+              }
+            }
           } else if (mode.kind === "json") {
             emitText(
               result?.structured_output !== undefined
@@ -187,13 +224,15 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
               type: "tool-call",
               toolCallId: `call_${randomUUID()}`,
               toolName: call.name,
-              input: JSON.stringify(call.input),
+              // Possibly invalid JSON: the AI SDK then reports the error to
+              // the model as the tool result, and the model can retry.
+              input: call.input,
             });
           }
           controller.enqueue({
             type: "finish",
             finishReason: finishReason(result, toolCalls.length > 0),
-            usage: toUsage(result?.usage),
+            usage: toUsage(addUsage(result?.usage, recoveryUsage)),
           });
         } catch (error) {
           controller.enqueue({ type: "error", error });
@@ -269,4 +308,22 @@ function toUsage(usage: AgyUsage | undefined): LanguageModelV4Usage {
     },
     ...(usage && { raw: { ...usage } }),
   };
+}
+
+function addUsage(a: AgyUsage | undefined, b: AgyUsage | undefined): AgyUsage | undefined {
+  if (a === undefined || b === undefined) return a ?? b;
+  const sum = (x: number | undefined, y: number | undefined) =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  const total: Record<string, number> = {};
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "thinking_tokens",
+    "cache_read_tokens",
+    "total_tokens",
+  ] as const) {
+    const value = sum(a[key], b[key]);
+    if (value !== undefined) total[key] = value;
+  }
+  return total;
 }

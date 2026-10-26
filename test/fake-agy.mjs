@@ -1,6 +1,6 @@
 // Stand-in for the agy CLI. Reads one stream-json user message from stdin and
 // replays canned print-mode events selected by FAKE_AGY_SCENARIO.
-import { writeFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 
 if (process.argv[2] === "models") {
   process.stderr.write("Fetching available models...\n");
@@ -18,14 +18,15 @@ process.stdin.on("data", (chunk) => (input += chunk));
 process.stdin.on("end", () => {
   const message = JSON.parse(input.trim().split("\n")[0]);
   if (process.env.FAKE_AGY_LOG) {
-    writeFileSync(
+    // One JSON line per agy invocation.
+    appendFileSync(
       process.env.FAKE_AGY_LOG,
-      JSON.stringify({
+      `${JSON.stringify({
         args: process.argv.slice(2),
         prompt: message.message.content,
         cwd: process.cwd(),
         home: process.env.HOME,
-      }),
+      })}\n`,
     );
   }
   const id = "conv-1";
@@ -57,8 +58,24 @@ process.stdin.on("end", () => {
       emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: reply, usage } });
       process.exit(0);
     }
-    case "malformed-tools": {
-      const reply = "Checking.<tool_calls>[{name: bash}]</tool_calls>";
+    case "malformed-tools":
+    case "recovery-fails":
+    case "bad-input": {
+      const prompt = message.message.content;
+      if (prompt.includes("but the block is malformed")) {
+        // The package's recovery call: answer with schema output.
+        const structured = {
+          toolCalls: process.env.FAKE_AGY_SCENARIO === "recovery-fails" ? [] : [{ name: "bash", input: { command: "ls" } }],
+        };
+        emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: JSON.stringify(structured), structured_output: structured, usage } });
+        process.exit(0);
+      }
+      const answered = /\[tool result \w+ id=/.test(prompt);
+      const reply = answered
+        ? "Done."
+        : process.env.FAKE_AGY_SCENARIO === "bad-input"
+          ? 'Checking.<tool_calls>[{"name": "bash", "input": {command: ls}}]</tool_calls>'
+          : "Checking.<tool_calls>[{name: bash, input: {command: ls}}]</tool_calls>";
       emit({ event: "init", conversation_id: id });
       streamText(1, reply);
       emit({ event: "result", result: { conversation_id: id, status: "SUCCESS", response: reply, usage } });

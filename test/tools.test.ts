@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseToolCalls, ToolCallStream } from "../src/tools.js";
+import { parseToolCalls, readRecoveredToolCalls, ToolCallStream } from "../src/tools.js";
 
 function run(reply: string, size: number) {
   const stream = new ToolCallStream();
@@ -10,18 +10,20 @@ function run(reply: string, size: number) {
   }
   const end = stream.finish();
   if (end.text) deltas.push(end.text);
-  return { text: deltas.join(""), deltas, toolCalls: end.toolCalls };
+  const toolCalls = end.block === undefined ? [] : (parseToolCalls(end.block) ?? []);
+  return { text: deltas.join(""), deltas, toolCalls };
 }
 
 describe("ToolCallStream", () => {
-  const block = '<tool_calls>[{"name":"current_time","input":{"timeZone":"Asia/Tokyo"}},{"name":"bash","input":{"command":"ls"}}]</tool_calls>';
+  const block =
+    '<tool_calls>[{"name":"current_time","input":{"timeZone":"Asia/Tokyo"}},{"name":"bash","input":{"command":"ls"}}]</tool_calls>';
 
   it.each([1, 2, 3, 5, 11, 500])("splits prose and tool calls in %i-character chunks", (size) => {
     const result = run(`Checking both now.\n\n${block}\n`, size);
     expect(result.text).toBe("Checking both now.");
     expect(result.toolCalls).toEqual([
-      { name: "current_time", input: { timeZone: "Asia/Tokyo" } },
-      { name: "bash", input: { command: "ls" } },
+      { name: "current_time", input: '{"timeZone":"Asia/Tokyo"}' },
+      { name: "bash", input: '{"command":"ls"}' },
     ]);
     expect(result.deltas.some((delta) => delta.includes("<"))).toBe(false);
   });
@@ -52,7 +54,7 @@ describe("ToolCallStream", () => {
 
   it("accepts a missing closing tag", () => {
     expect(run('<tool_calls>[{"name":"bash","input":{}}]', 4).toolCalls).toEqual([
-      { name: "bash", input: {} },
+      { name: "bash", input: "{}" },
     ]);
   });
 });
@@ -60,11 +62,43 @@ describe("ToolCallStream", () => {
 describe("parseToolCalls", () => {
   it("accepts a single object and fenced JSON", () => {
     expect(parseToolCalls('```json\n{"name":"bash","input":{"command":"ls"}}\n```')).toEqual([
-      { name: "bash", input: { command: "ls" } },
+      { name: "bash", input: '{"command":"ls"}' },
     ]);
   });
 
-  it("rejects malformed JSON", () => {
-    expect(() => parseToolCalls("[{name: bash}]")).toThrow(/malformed tool calls/);
+  it("salvages calls from a block with a missing bracket", () => {
+    expect(
+      parseToolCalls('[{"name": "bash", "input": {"command": "ls"}}, {"name": "current_time", "input": {"timeZone": "UTC"}'),
+    ).toEqual([
+      { name: "bash", input: '{"command": "ls"}' },
+      { name: "current_time", input: '{"timeZone": "UTC"}' },
+    ]);
+  });
+
+  it("keeps invalid arguments as text so the model can be told", () => {
+    expect(parseToolCalls('[{"name": "bash", "input": {command: ls}}]')).toEqual([
+      { name: "bash", input: "{command: ls}" },
+    ]);
+  });
+
+  it("handles braces inside string arguments", () => {
+    expect(parseToolCalls('[{"name": "bash", "input": {"command": "echo \\"}{\\""}} ,]')).toEqual([
+      { name: "bash", input: '{"command": "echo \\"}{\\""}' },
+    ]);
+  });
+
+  it("returns an empty input when none follows the name", () => {
+    expect(parseToolCalls('[{"name": "bash", oops}]')).toEqual([{ name: "bash", input: "" }]);
+  });
+
+  it("returns undefined when no tool name is readable", () => {
+    expect(parseToolCalls("[{name: bash}]")).toBeUndefined();
+  });
+
+  it("reads recovered calls from the schema output", () => {
+    expect(readRecoveredToolCalls({ toolCalls: [{ name: "bash", input: { command: "ls" } }] })).toEqual([
+      { name: "bash", input: '{"command":"ls"}' },
+    ]);
+    expect(readRecoveredToolCalls(undefined)).toEqual([]);
   });
 });
