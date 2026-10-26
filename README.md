@@ -23,7 +23,7 @@ eve passes an [AI SDK](https://ai-sdk.dev) `LanguageModel` to its agent loop. `a
 
 1. Flattens the conversation (system prompt, messages, earlier tool calls and results) into a single prompt. Each call is stateless.
 2. Runs `agy --print` with stream-json input and output, and sends the prompt on stdin.
-3. If eve offers tools, adds them to the prompt and passes `--json-schema`. agy then finishes with `{ text, toolCalls }`.
+3. If eve offers tools, lists them in the prompt. The model streams its reply as plain text and requests tools in a closing `<tool_calls>[...]</tool_calls>` block. The package streams the text and parses the block.
 4. Returns those tool calls to eve. **eve executes every tool**: built-in `bash`, your `agent/tools/*`, and MCP servers from `agent/connections/*`. agy only reasons.
 
 agy runs from an isolated home (`~/.eve-antigravity`). Its `settings.json` denies all of agy's own tools (`command(*)`, `view_file(*)`, `write_file(*)`, `read_url(*)`), so agy can't act on its own and your personal agy allow list is never used. Your sign-in stays valid because agy keeps it in the OS keyring.
@@ -74,8 +74,8 @@ Errors are `AgyError` instances with a `code`: `NOT_INSTALLED`, `SIGN_IN_REQUIRE
 
 | Feature                           | Status                                                         |
 | --------------------------------- | -------------------------------------------------------------- |
-| Text generation and streaming     | Yes. Streams token deltas when no tools are offered            |
-| Tool calling (eve tools, MCP)     | Yes, via structured output. Text arrives at the end of the step |
+| Text generation and streaming     | Yes, including while tools are offered                         |
+| Tool calling (eve tools, MCP)     | Yes, via a `<tool_calls>` block in the reply. A malformed block fails the step with an error |
 | `toolChoice` none/required/tool   | Yes                                                            |
 | JSON output with a schema         | Yes (`--json-schema`)                                          |
 | Usage (input/output/reasoning/cache) | Yes, from agy's result event                                |
