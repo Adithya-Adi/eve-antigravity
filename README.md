@@ -75,21 +75,29 @@ Each step resends the whole conversation, plus about 7K tokens of agy's own syst
 
 ## Production and containers
 
-agy's personal Google sign-in lives in the OS keyring (Windows Credential Manager, macOS Keychain, Secret Service on Linux). **Copying it into a container does not work.** Users of headless agy report that even writing the token into a Linux keyring by hand still ends in the interactive OAuth prompt.
+On a desktop, agy keeps your Google sign-in in the OS keyring, so you can't copy it from your laptop into a container. Inside a Linux container without a keyring, agy saves the sign-in to a file instead: `$HOME/.gemini/antigravity-cli/antigravity-oauth-token`. If you sign in once inside the container and keep that file on a volume, the login survives restarts. (Tested with agy 1.4.7 on `node:24-slim`.)
 
-agy supports two headless sign-in methods ([google-antigravity/antigravity-cli#223](https://github.com/google-antigravity/antigravity-cli/issues/223)):
+eve-antigravity runs agy with `HOME=<runtimeDir>/home`, so sign in with that same home:
 
-- `GEMINI_API_KEY` (agy 1.1.13+): Gemini API billing, not your Antigravity plan
-- Service account / Application Default Credentials (agy 1.1.10+): Google Cloud billing
+```bash
+# image: Linux agy on PATH (curl -fsSL https://antigravity.google/cli/install.sh | bash)
+# pod: EVE_ANTIGRAVITY_DIR=/data/eve-antigravity, with /data on a persistent volume
+kubectl exec -it <pod> -- sh -c 'mkdir -p "$EVE_ANTIGRAVITY_DIR/home" && cd "$EVE_ANTIGRAVITY_DIR" && HOME="$EVE_ANTIGRAVITY_DIR/home" agy'
+# choose "1. Google OAuth", open the printed URL, sign in,
+# paste the authorization code shown on antigravity.google, then quit agy
+```
 
 Container checklist:
 
 1. Install agy in the image (Linux build) and put it on `PATH`, or set `agyPath`.
-2. Supply `GEMINI_API_KEY` or ADC through your platform's secret store, never baked into the image. eve-antigravity passes the process environment through to agy.
-3. Make `runtimeDir` writable (`EVE_ANTIGRAVITY_DIR=/tmp/eve-antigravity` works), or mount a volume.
-4. Check `agy models` inside the container. Model availability depends on the sign-in method.
+2. Set `EVE_ANTIGRAVITY_DIR` to a path on a **writable persistent volume**. agy refreshes the access token in place.
+3. Sign in once as shown above. Repeat if the token is revoked or the volume is lost.
+4. Treat the token file like a password. It grants access to your Google account's Antigravity and Cloud scopes. Never bake it into an image or commit it.
 
-The same restriction as eve's `chatgpt()` applies: subscription-backed use is meant for local development. For deployed agents, prefer an API-billed model.
+Alternatively, agy signs in without a browser via `GEMINI_API_KEY` (agy 1.1.13+) or a service account / Application Default Credentials (1.1.10+); see [google-antigravity/antigravity-cli#223](https://github.com/google-antigravity/antigravity-cli/issues/223). Both are billed per token instead of using your Antigravity plan. eve-antigravity passes the process environment through to agy.
+
+> [!CAUTION]
+> Using a personal Antigravity plan from a server that serves other people is the riskiest way to use this package. Every user's traffic counts against your account. eve's own `chatgpt()` helper is local-only for the same reason.
 
 ## Development
 
