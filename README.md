@@ -1,5 +1,11 @@
 # eve-antigravity
 
+[![npm version](https://img.shields.io/npm/v/eve-antigravity)](https://www.npmjs.com/package/eve-antigravity)
+[![npm downloads](https://img.shields.io/npm/dm/eve-antigravity)](https://www.npmjs.com/package/eve-antigravity)
+[![CI](https://github.com/Adithya-Adi/eve-antigravity/actions/workflows/ci.yml/badge.svg)](https://github.com/Adithya-Adi/eve-antigravity/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/node/v/eve-antigravity)](https://www.npmjs.com/package/eve-antigravity)
+
 Use the models from your local [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli) (`agy`) login inside [eve](https://eve.dev) agents. It works like eve's `chatgpt()` helper for a ChatGPT subscription, but for Antigravity.
 
 ```ts
