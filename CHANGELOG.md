@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/Adithya-Adi/eve-antigravity/compare/v0.3.2...v0.4.0) (2026-11-26)
+
+
+### Features
+
+* map eve reasoning option to agy --effort ([8566289](https://github.com/Adithya-Adi/eve-antigravity/commit/8566289f7063b3bc8db4dc743164bb6356ed8cca))
+
+
+### Bug Fixes
+
+* keep effort fixed by an agy model ID suffix ([de3a212](https://github.com/Adithya-Adi/eve-antigravity/commit/de3a21258c240fe7cfcd74e67275c70b59b21043))
+
 ## [0.3.2](https://github.com/Adithya-Adi/eve-antigravity/compare/v0.3.1...v0.3.2) (2026-11-21)
 
 
