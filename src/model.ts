@@ -30,7 +30,7 @@ export interface AntigravitySettings {
   /** Arguments placed before agy's flags, for wrappers such as `wsl agy`. */
   readonly agyArgs?: readonly string[];
   /** Reasoning effort passed to `agy --effort`. */
-  readonly effort?: "low" | "medium" | "high";
+  readonly effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Kill agy after this many milliseconds. Defaults to 10 minutes. */
   readonly timeoutMs?: number;
   /**
@@ -121,8 +121,8 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       options.prompt,
       mode.kind === "tools" ? renderToolInstructions(tools, options.toolChoice) : undefined,
     );
-    const warnings = collectWarnings(options);
-    const agyEffort = effort(options.reasoning, this.settings.effort);
+    const warnings = collectWarnings(options, this.modelId);
+    const agyEffort = effort(options.reasoning, this.modelId, this.settings.effort);
     const agy = {
       command: this.settings.agyPath ?? "agy",
       ...(this.settings.agyArgs && { prefixArgs: this.settings.agyArgs }),
@@ -262,7 +262,7 @@ function mergeEnv(
   return { ...runtime.env, ...extra };
 }
 
-function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[] {
+function collectWarnings(options: LanguageModelV4CallOptions, modelId: string): SharedV4Warning[] {
   const warnings: SharedV4Warning[] = [];
   for (const feature of UNSUPPORTED_SETTINGS) {
     if (options[feature] !== undefined) warnings.push({ type: "unsupported", feature });
@@ -273,12 +273,13 @@ function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[]
     }
   }
   const { reasoning } = options;
-  if (reasoning !== undefined && reasoning !== "provider-default" && !AGY_EFFORTS.has(reasoning)) {
-    warnings.push({
-      type: "unsupported",
-      feature: "reasoning",
-      details: `agy accepts low, medium or high, not "${reasoning}".`,
-    });
+  if (reasoning !== undefined && reasoning !== "provider-default") {
+    const details = !AGY_EFFORTS.has(reasoning)
+      ? `agy accepts ${[...AGY_EFFORTS].join(", ")}, not "${reasoning}".`
+      : EFFORT_SUFFIX.test(modelId)
+        ? `"${modelId}" already fixes its effort; use the ID without the suffix to let reasoning set it.`
+        : undefined;
+    if (details) warnings.push({ type: "unsupported", feature: "reasoning", details });
   }
   if (options.responseFormat?.type === "json" && options.responseFormat.schema === undefined) {
     warnings.push({
@@ -290,14 +291,22 @@ function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[]
   return warnings;
 }
 
-const AGY_EFFORTS = new Set(["low", "medium", "high"]);
+const AGY_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high", "xhigh", "max"]);
+/** agy rejects `--effort` that differs from an effort already in the model ID, e.g. `gemini-3.8-flash-low`. */
+const EFFORT_SUFFIX = /-(?:low|medium|high|xhigh|max)$/u;
 
-/** eve's `defineAgent({ reasoning })` arrives as the AI SDK `reasoning` call option and wins over `settings.effort`. */
+/**
+ * eve's `defineAgent({ reasoning })` arrives as the AI SDK `reasoning` call
+ * option and wins over `settings.effort`, unless the model ID fixes the effort.
+ */
 function effort(
   reasoning: LanguageModelV4CallOptions["reasoning"],
+  modelId: string,
   fallback: AntigravitySettings["effort"],
 ): AntigravitySettings["effort"] {
-  return reasoning !== undefined && AGY_EFFORTS.has(reasoning) ? (reasoning as AntigravitySettings["effort"]) : fallback;
+  return reasoning !== undefined && AGY_EFFORTS.has(reasoning) && !EFFORT_SUFFIX.test(modelId)
+    ? (reasoning as AntigravitySettings["effort"])
+    : fallback;
 }
 
 function finishReason(

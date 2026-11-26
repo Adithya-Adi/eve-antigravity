@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { generateText, Output, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgyError, antigravity, antigravityContextWindow } from "../src/index.js";
+import { AgyError, antigravity, antigravityContextWindow, type AntigravitySettings } from "../src/index.js";
 
 const FAKE_AGY = fileURLToPath(new URL("./fake-agy.mjs", import.meta.url));
 
@@ -21,8 +21,11 @@ afterEach(() => {
   delete process.env.FAKE_AGY_SCENARIO;
 });
 
-function model(scenario: string, settings: { timeoutMs?: number; effort?: "low" | "medium" | "high" } = {}) {
-  return antigravity("gemini-3.8-flash-low", {
+function model(
+  scenario: string,
+  { id = "gemini-3.8-flash-low", ...settings }: { id?: string } & AntigravitySettings = {},
+) {
+  return antigravity(id, {
     agyPath: process.execPath,
     agyArgs: [FAKE_AGY],
     runtimeDir: dir,
@@ -94,12 +97,19 @@ describe("antigravity()", () => {
   });
 
   it("maps eve's reasoning option to agy --effort, overriding settings.effort", async () => {
-    const m = model("text", { effort: "low" });
-    await generateText({ model: m, prompt: "hi", reasoning: "high" });
+    const m = model("text", { id: "gemini-3.8-flash", effort: "low" });
+    const ok = await generateText({ model: m, prompt: "hi", reasoning: "high" });
     expect((await lastCall()).args).toEqual(expect.arrayContaining(["--effort", "high"]));
+    expect(ok.warnings).toEqual([]);
 
-    const result = await generateText({ model: m, prompt: "hi", reasoning: "xhigh" });
+    const bad = await generateText({ model: m, prompt: "hi", reasoning: "minimal" });
     expect((await lastCall()).args).toEqual(expect.arrayContaining(["--effort", "low"]));
+    expect(bad.warnings).toContainEqual(expect.objectContaining({ feature: "reasoning" }));
+  });
+
+  it("keeps the effort an agy model ID already fixes, since agy rejects a conflicting --effort", async () => {
+    const result = await generateText({ model: model("text"), prompt: "hi", reasoning: "high" });
+    expect((await lastCall()).args).not.toContain("--effort");
     expect(result.warnings).toContainEqual(expect.objectContaining({ feature: "reasoning" }));
   });
 

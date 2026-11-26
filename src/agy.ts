@@ -39,7 +39,7 @@ export interface AgyRunOptions {
   /** Arguments placed before agy's own flags (for wrappers such as `wsl agy`). */
   readonly prefixArgs?: readonly string[];
   readonly model: string;
-  readonly effort?: "low" | "medium" | "high";
+  readonly effort?: "low" | "medium" | "high" | "xhigh" | "max";
   readonly prompt: string;
   /** JSON schema the final answer must satisfy. */
   readonly jsonSchema?: object;

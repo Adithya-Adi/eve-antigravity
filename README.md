@@ -55,7 +55,7 @@ Returns a `LanguageModelV4`. `model` defaults to `gemini-3.8-flash-medium`. An `
 | ------------ | ----------------------------------------- | ----------------------------------------------------- |
 | `agyPath`    | `agy`                                     | Path to the agy executable                            |
 | `agyArgs`    | `[]`                                      | Arguments placed before agy's flags (e.g. for `wsl`)  |
-| `effort`     | agy default                               | `low`, `medium` or `high` (passed as `--effort`). eve's `reasoning` overrides it when it is one of these |
+| `effort`     | agy default                               | `low`, `medium`, `high`, `xhigh` or `max` (passed as `--effort`). eve's `reasoning` overrides it, unless the model ID already ends in an effort such as `-low` (agy rejects a conflicting `--effort`); use `gemini-3.8-flash` to let `reasoning` choose |
 | `timeoutMs`  | `600000`                                  | Kill agy after this long                              |
 | `runtimeDir` | `$EVE_ANTIGRAVITY_DIR` or `~/.eve-antigravity` | Isolated agy home and empty workspace            |
 | `env`        | `{}`                                      | Extra environment variables for agy                   |
