@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ let dir: string;
 let log: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "eve-antigravity-test-"));
+  dir = await realpath(await mkdtemp(join(tmpdir(), "eve-antigravity-test-")));
   log = join(dir, "agy-call.json");
 });
 
@@ -21,7 +21,7 @@ afterEach(() => {
   delete process.env.FAKE_AGY_SCENARIO;
 });
 
-function model(scenario: string, settings: { timeoutMs?: number } = {}) {
+function model(scenario: string, settings: { timeoutMs?: number; effort?: "low" | "medium" | "high" } = {}) {
   return antigravity("gemini-3.8-flash-low", {
     agyPath: process.execPath,
     agyArgs: [FAKE_AGY],
@@ -91,6 +91,16 @@ describe("antigravity()", () => {
     );
     expect(settings.permissions.deny).toContain("command(*)");
     expect(settings.allowNonWorkspaceAccess).toBe(false);
+  });
+
+  it("maps eve's reasoning option to agy --effort, overriding settings.effort", async () => {
+    const m = model("text", { effort: "low" });
+    await generateText({ model: m, prompt: "hi", reasoning: "high" });
+    expect((await lastCall()).args).toEqual(expect.arrayContaining(["--effort", "high"]));
+
+    const result = await generateText({ model: m, prompt: "hi", reasoning: "xhigh" });
+    expect((await lastCall()).args).toEqual(expect.arrayContaining(["--effort", "low"]));
+    expect(result.warnings).toContainEqual(expect.objectContaining({ feature: "reasoning" }));
   });
 
   it("streams text deltas", async () => {

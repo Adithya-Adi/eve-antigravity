@@ -122,11 +122,12 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       mode.kind === "tools" ? renderToolInstructions(tools, options.toolChoice) : undefined,
     );
     const warnings = collectWarnings(options);
+    const agyEffort = effort(options.reasoning, this.settings.effort);
     const agy = {
       command: this.settings.agyPath ?? "agy",
       ...(this.settings.agyArgs && { prefixArgs: this.settings.agyArgs }),
       model: this.modelId,
-      ...(this.settings.effort && { effort: this.settings.effort }),
+      ...(agyEffort && { effort: agyEffort }),
       cwd: runtime.workspace,
       env: mergeEnv(runtime, this.settings.env),
       ...(options.abortSignal && { signal: options.abortSignal }),
@@ -271,6 +272,14 @@ function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[]
       warnings.push({ type: "unsupported", feature: `provider tool ${tool.id}` });
     }
   }
+  const { reasoning } = options;
+  if (reasoning !== undefined && reasoning !== "provider-default" && !AGY_EFFORTS.has(reasoning)) {
+    warnings.push({
+      type: "unsupported",
+      feature: "reasoning",
+      details: `agy accepts low, medium or high, not "${reasoning}".`,
+    });
+  }
   if (options.responseFormat?.type === "json" && options.responseFormat.schema === undefined) {
     warnings.push({
       type: "unsupported",
@@ -279,6 +288,16 @@ function collectWarnings(options: LanguageModelV4CallOptions): SharedV4Warning[]
     });
   }
   return warnings;
+}
+
+const AGY_EFFORTS = new Set(["low", "medium", "high"]);
+
+/** eve's `defineAgent({ reasoning })` arrives as the AI SDK `reasoning` call option and wins over `settings.effort`. */
+function effort(
+  reasoning: LanguageModelV4CallOptions["reasoning"],
+  fallback: AntigravitySettings["effort"],
+): AntigravitySettings["effort"] {
+  return reasoning !== undefined && AGY_EFFORTS.has(reasoning) ? (reasoning as AntigravitySettings["effort"]) : fallback;
 }
 
 function finishReason(
