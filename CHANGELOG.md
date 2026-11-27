@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/Adithya-Adi/eve-antigravity/compare/v0.4.0...v0.4.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **deps:** bump the npm-minor-patch group with 3 updates ([916489a](https://github.com/Adithya-Adi/eve-antigravity/commit/916489a3f80ae103c0529f19abd8a66a2ee1eca5))
+* **deps:** bump the npm-minor-patch group with 3 updates ([a10d109](https://github.com/Adithya-Adi/eve-antigravity/commit/a10d109ab849d5a4eaaf26eb29e50c9e63b1bf4e))
+
 ## [0.4.0](https://github.com/Adithya-Adi/eve-antigravity/compare/v0.3.2...v0.4.0) (2026-11-26)
 
 
